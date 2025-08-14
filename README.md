@@ -1,8 +1,8 @@
-# Python API Examples
+# Python API Examples with OpenTelemetry
 
-This repository contains two simple REST API implementations using different Python web frameworks:
+This repository contains two simple REST API implementations using different Python web frameworks, fully instrumented with **OpenTelemetry** for observability:
 
-## Projects
+## 🚀 Projects
 
 ### 1. FastAPI Project (`fastapi-project/`)
 - **Framework**: FastAPI
@@ -12,6 +12,7 @@ This repository contains two simple REST API implementations using different Pyt
   - Type validation with Pydantic
   - Async support
   - High performance
+  - **🔍 OpenTelemetry instrumentation**
 
 ### 2. Flask Project (`flask-project/`)
 - **Framework**: Flask
@@ -21,6 +22,25 @@ This repository contains two simple REST API implementations using different Pyt
   - Flexible and extensible
   - More manual control
   - Status-based filtering
+  - **🔍 OpenTelemetry instrumentation**
+
+## 📊 OpenTelemetry Features
+
+### Implemented Instrumentation:
+- ✅ **Automatic HTTP tracing** (requests, responses, status codes)
+- ✅ **Custom spans** with business logic attributes
+- ✅ **Custom metrics** (counters, histograms)
+- ✅ **Error tracking** and exception recording
+- ✅ **Distributed tracing** with trace propagation
+- ✅ **Resource attributes** (service name, version, environment)
+- ✅ **System metrics** (CPU, memory, disk)
+- ✅ **Logging correlation** with trace IDs
+
+### Telemetry Data Collection:
+- **OTLP Collector**: Receives and processes telemetry data
+- **Multiple exporters**: Console, file, and OTLP HTTP/gRPC
+- **Zpages**: Built-in debugging and monitoring pages
+- **Health checks**: Collector and service health monitoring
 
 ## Quick Start
 
@@ -108,6 +128,46 @@ python test_docker.py
 
 # Test Docker containers with nginx gateway
 python test_docker.py --with-nginx
+```
+
+#### OpenTelemetry Testing:
+```bash
+# Comprehensive OpenTelemetry instrumentation testing
+python test_otel.py
+```
+
+### 📊 Observability Endpoints
+
+Once running, you can access various observability endpoints:
+
+#### Service Endpoints:
+- **FastAPI**: http://localhost:8000
+  - API Docs: http://localhost:8000/docs
+  - Health: http://localhost:8000/health
+- **Flask**: http://localhost:5000
+  - Health: http://localhost:5000/health
+
+#### OpenTelemetry Endpoints:
+- **OTEL Collector Health**: http://localhost:13133/
+- **Zpages (Tracing Debug)**: http://localhost:55679/debug/tracez
+- **Zpages (Services)**: http://localhost:55679/debug/servicez
+- **OTLP gRPC Receiver**: localhost:4317
+- **OTLP HTTP Receiver**: localhost:4318
+
+#### Viewing Telemetry Data:
+```bash
+# View collector logs
+docker-compose logs -f otel-collector
+
+# View service logs with correlation IDs
+docker-compose logs -f fastapi-service
+docker-compose logs -f flask-service
+
+# View exported trace files
+cat ./logs/all_traces.json | jq .
+
+# Monitor container stats
+docker stats
 ```
 
 ## API Comparison

@@ -126,7 +126,8 @@ def main():
     
     # Wait a moment for services to be ready
     print("⏳ Waiting for services to be ready...")
-    time.sleep(3)
+    time.sleep(1)  # Reduced from 3 seconds
+    print("✅ Ready to test services!")
     
     # Test both services directly
     test_service("http://localhost:8000", "FastAPI")

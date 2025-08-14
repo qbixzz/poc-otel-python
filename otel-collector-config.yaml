@@ -1,0 +1,254 @@
+# otel-collector-config.yaml for Docker
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+        cors:
+          allowed_origins:
+            - "http://*"
+            - "https://*"
+  
+  hostmetrics:
+    collection_interval: 10s
+    root_path: /
+    scrapers:
+      cpu:
+        metrics:
+          system.cpu.utilization:
+            enabled: true
+          system.cpu.logical.count:
+            enabled: true
+      memory:
+        metrics:
+          system.memory.utilization:
+            enabled: true
+      process:
+        mute_process_exe_error: true
+        mute_process_io_error: true
+        mute_process_user_error: true
+        metrics:
+          process.threads:
+            enabled: true
+          process.open_file_descriptors:
+            enabled: true
+          process.memory.utilization:
+            enabled: true
+          process.disk.operations:
+            enabled: true
+      network: {}
+      processes: {}
+      load: {}
+      disk: {}
+      filesystem:
+        exclude_mount_points:
+          mount_points:
+            - /dev/*
+            - /proc/*
+            - /sys/*
+            - /run/k3s/containerd/*
+            - /var/lib/docker/*
+            - /var/lib/kubelet/*
+            - /snap/*
+          match_type: regexp
+        exclude_fs_types:
+          fs_types:
+            - autofs
+            - binfmt_misc
+            - bpf
+            - cgroup2
+            - configfs
+            - debugfs
+            - devpts
+            - devtmpfs
+            - fusectl
+            - hugetlbfs
+            - iso9660
+            - mqueue
+            - nsfs
+            - overlay
+            - proc
+            - procfs
+            - pstore
+            - rpc_pipefs
+            - securityfs
+            - selinuxfs
+            - squashfs
+            - sysfs
+            - tracefs
+          match_type: strict
+
+processors:
+  batch:
+    timeout: 1s
+    send_batch_size: 1000
+  
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 1024      # Use fixed memory limit (1GB)
+    spike_limit_mib: 256 # Use fixed spike limit (256MB)
+  
+  resource:
+    attributes:
+      - key: deployment.environment
+        value: development
+        action: upsert
+      - key: service.name
+        value: "otel-collector-hostmetrics"
+        action: upsert
+      - key: service.version
+        value: "1.0.0"
+        action: upsert
+      # Set host name to container name for better display
+      - key: host.name
+        value: "otel-collector"
+        action: upsert
+
+  resourcedetection/system:
+    detectors: ["system"]
+    system:
+      hostname_sources: ["os"]
+      resource_attributes:
+        host.name:
+          enabled: true
+        host.id:
+          enabled: false
+        host.arch:
+          enabled: true
+        host.ip:
+          enabled: true
+        host.mac:
+          enabled: true
+        host.cpu.vendor.id:
+          enabled: true
+        host.cpu.family:
+          enabled: true
+        host.cpu.model.id:
+          enabled: true
+        host.cpu.model.name:
+          enabled: true
+        host.cpu.stepping:
+          enabled: true
+        host.cpu.cache.l2.size:
+          enabled: true
+        os.description:
+          enabled: true
+        os.type:
+          enabled: true
+
+  # Filter processor to ignore private/internal endpoints
+  filter:
+    traces:
+      span:
+      - 'IsMatch(attributes["http.target"], "^/health.*")'
+      - 'IsMatch(attributes["http.target"], "^/readiness.*")'
+      - 'IsMatch(attributes["http.target"], "^/liveness.*")'
+      - 'IsMatch(attributes["http.target"], "^/actuator.*")'  
+      - 'IsMatch(attributes["http.target"], "^/metrics.*")'
+      - 'attributes["http.target"] == "/info"'
+      - 'attributes["http.target"] == "/status"'
+      - 'attributes["http.target"] == "/ping"'
+  
+  # Transform processor for span type mapping
+  transform:
+    trace_statements:
+      - context: span
+        statements:
+          - set(attributes["transaction.id"], attributes["transaction_id"]) where attributes["transaction_id"] != nil
+          - delete_key(attributes, "transaction_id") where attributes["transaction.id"] != nil
+          
+      - context: resource
+        statements:
+          - set(attributes["transaction.type"], "request")
+  
+  attributes:
+    actions:
+      # Add ECS version
+      - key: ecs.version
+        value: "1.6.0"
+        action: insert
+      # Set event dataset for APM
+      - key: event.dataset
+        value: "apm"
+        action: insert
+      # Copy the Body field to message field at the root level (required by APM)
+      - key: message
+        from_attribute: body
+        action: upsert
+
+  groupbytrace:
+    wait_duration: 10s
+    num_traces: 100
+
+exporters:
+  # Connect to APM Server running in Kubernetes via port-forwarding to localhost
+  otlp/elastic:
+    endpoint: http://host.docker.internal:8200
+    tls:
+      insecure: true
+    headers:
+      "Authorization": "Bearer y0f3Ctv6t1jw3u6Y408at0sJ"
+
+  otlphttp/elastic:
+    endpoint: "http://host.docker.internal:8200"
+    headers:
+      "Authorization": "Bearer y0f3Ctv6t1jw3u6Y408at0sJ"
+
+  debug:
+    verbosity: normal  # Change from "detailed" to "normal"
+    sampling_initial: 2
+    sampling_thereafter: 500
+    
+  file/spans:
+    path: /var/log/traces/all_traces.json  
+    format: json
+    rotation:
+      max_megabytes: 5
+      max_days: 7
+      max_backups: 100
+      
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+  
+  pprof:
+    endpoint: 0.0.0.0:1888
+  
+  zpages:
+    endpoint: 0.0.0.0:55679
+
+service:
+  # telemetry:
+  #   logs:
+  #     level: "info"  # Options: debug, info, warn, error
+  #     development: false
+  #     sampling:
+  #       enabled: true
+  #     encoding: "json"  # or "console"
+  #     output_paths:
+  #       - "stdout"
+  #       - "/var/log/otel-collector.log"  # File output
+  #     error_output_paths:
+  #       - "stderr"
+  #       - "/var/log/otel-collector-error.log"
+
+  extensions: [health_check, pprof, zpages]
+  
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, filter, groupbytrace, batch, transform]
+      exporters: [otlphttp/elastic, file/spans]
+    
+    metrics:
+      receivers: [otlp, hostmetrics]
+      processors: [memory_limiter, resource, batch]
+      exporters: [otlphttp/elastic]
+    
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, attributes, batch]
+      exporters: [otlphttp/elastic]
+

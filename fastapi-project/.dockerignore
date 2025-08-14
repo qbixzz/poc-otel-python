@@ -45,3 +45,10 @@ tests/
 
 # Logs
 *.log
+
+# Environment files (keep .env for container)
+# .env
+
+# OpenTelemetry
+logs/
+otel-collector-config.yaml
