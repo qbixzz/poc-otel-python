@@ -2,31 +2,41 @@
 OpenTelemetry configuration for Flask application
 """
 import os
+import uuid
+import time
 import logging
 from typing import Optional
+from functools import wraps
 
-from opentelemetry import trace, metrics, baggage
+from flask import g, request
+from opentelemetry import trace, metrics
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader, ConsoleMetricExporter
+from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+from opentelemetry.sdk._logs.export import BatchLogRecordProcessor, ConsoleLogExporter
 from opentelemetry.sdk.resources import Resource, SERVICE_NAME, SERVICE_VERSION, SERVICE_INSTANCE_ID, DEPLOYMENT_ENVIRONMENT
+from opentelemetry.trace import Status, StatusCode, get_current_span
 
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
+from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter as HTTPSpanExporter
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter as HTTPMetricExporter
+from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter as HTTPLogExporter
 
 from opentelemetry.instrumentation.flask import FlaskInstrumentor
 from opentelemetry.instrumentation.requests import RequestsInstrumentor
 from opentelemetry.instrumentation.logging import LoggingInstrumentor
 from opentelemetry.instrumentation.system_metrics import SystemMetricsInstrumentor
 
-from opentelemetry.propagate import set_global_textmap
+from opentelemetry.propagate import set_global_textmap, extract
 from opentelemetry.propagators.b3 import B3MultiFormat
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from opentelemetry.baggage.propagation import W3CBaggagePropagator
 from opentelemetry.propagators.composite import CompositePropagator
+from opentelemetry import _logs
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -140,6 +150,51 @@ class OpenTelemetryConfig:
         )
         metrics.set_meter_provider(meter_provider)
 
+    def setup_logging(self, resource: Resource) -> None:
+        """Configure OpenTelemetry logging"""
+        log_processors = []
+        
+        if self.export_to_console:
+            console_processor = BatchLogRecordProcessor(ConsoleLogExporter())
+            log_processors.append(console_processor)
+            
+        if self.export_to_otlp:
+            try:
+                if self.use_http_exporter:
+                    otlp_exporter = HTTPLogExporter(
+                        endpoint=f"{self.otlp_http_endpoint}/v1/logs",
+                        headers=self._parse_headers(self.otlp_headers),
+                    )
+                else:
+                    otlp_exporter = OTLPLogExporter(
+                        endpoint=self.otlp_grpc_endpoint,
+                        headers=self._parse_headers(self.otlp_headers),
+                    )
+                
+                otlp_processor = BatchLogRecordProcessor(otlp_exporter)
+                log_processors.append(otlp_processor)
+                logger.info(f"OTLP log exporter configured: {'HTTP' if self.use_http_exporter else 'gRPC'}")
+                
+            except Exception as e:
+                logger.error(f"Failed to configure OTLP log exporter: {e}")
+
+        # Create logger provider
+        logger_provider = LoggerProvider(resource=resource)
+        for processor in log_processors:
+            logger_provider.add_log_record_processor(processor)
+        
+        _logs.set_logger_provider(logger_provider)
+        
+        # Create and configure the logging handler
+        handler = LoggingHandler(
+            level=logging.INFO,
+            logger_provider=logger_provider,
+        )
+        
+        # Add the handler to the root logger to capture all logs
+        logging.getLogger().addHandler(handler)
+        logger.info("OpenTelemetry logging configured")
+
     def setup_propagation(self) -> None:
         """Configure trace context propagation"""
         # Set up composite propagator with multiple formats
@@ -179,6 +234,60 @@ class OpenTelemetryConfig:
                 tracer_provider=trace.get_tracer_provider(),
                 excluded_urls="health,readiness,liveness,metrics",  # Exclude health endpoints
             )
+            
+            # Add Flask request hooks for enhanced tracing and logging
+            @app.before_request
+            def before_request():
+                """Called before each request"""
+                g.start_time = time.time()
+                g.request_id = str(uuid.uuid4())
+                
+                # Extract trace context from incoming headers
+                extract(request.headers)
+                
+                # Store current span for later access
+                current_span = get_current_span()
+                if current_span and current_span.is_recording():
+                    g.current_span = current_span
+                    
+                    # Add request metadata to span
+                    current_span.set_attribute("http.method", request.method)
+                    current_span.set_attribute("http.url", request.url)
+                    current_span.set_attribute("http.route", request.endpoint or "unknown")
+                    current_span.set_attribute("http.user_agent", request.headers.get("User-Agent", ""))
+                    current_span.set_attribute("request.id", g.request_id)
+                    
+                    # Add custom attributes
+                    if hasattr(request, 'remote_addr'):
+                        current_span.set_attribute("http.client_ip", request.remote_addr)
+
+            @app.after_request
+            def after_request(response):
+                """Called after each request"""
+                duration = time.time() - getattr(g, 'start_time', time.time())
+                
+                # Update span with response data
+                current_span = getattr(g, 'current_span', None)
+                if current_span and current_span.is_recording():
+                    current_span.set_attribute("http.status_code", response.status_code)
+                    current_span.set_attribute("http.response_size", len(response.get_data()))
+                    current_span.set_attribute("http.request_duration_ms", round(duration * 1000, 2))
+                    
+                    # Set span status based on HTTP status code
+                    if response.status_code >= 400:
+                        current_span.set_status(Status(StatusCode.ERROR, f"HTTP {response.status_code}"))
+                
+                return response
+
+            @app.teardown_request
+            def teardown_request(exception):
+                """Called after request teardown"""
+                if exception:
+                    current_span = getattr(g, 'current_span', None)
+                    if current_span and current_span.is_recording():
+                        current_span.record_exception(exception)
+                        current_span.set_status(Status(StatusCode.ERROR, str(exception)))
+            
             logger.info("Flask instrumentation enabled")
         except Exception as e:
             logger.error(f"Failed to instrument Flask: {e}")
@@ -206,6 +315,7 @@ class OpenTelemetryConfig:
             # Setup components
             self.setup_tracing(resource)
             self.setup_metrics(resource)
+            self.setup_logging(resource)  # Add logging setup
             self.setup_propagation()
             self.setup_instrumentations()
             
@@ -234,3 +344,27 @@ def get_tracer(name: str):
 def get_meter(name: str):
     """Get a meter instance"""
     return metrics.get_meter(name)
+
+def get_current_trace_id() -> Optional[str]:
+    """Get current trace ID"""
+    current_span = get_current_span()
+    if current_span and current_span.is_recording():
+        return f"{current_span.get_span_context().trace_id:032x}"
+    return None
+
+def get_current_span_id() -> Optional[str]:
+    """Get current span ID"""
+    current_span = get_current_span()
+    if current_span and current_span.is_recording():
+        return f"{current_span.get_span_context().span_id:016x}"
+    return None
+
+def get_request_id() -> Optional[str]:
+    """Get current request ID"""
+    return getattr(g, 'request_id', None)
+
+def add_span_attribute(key: str, value):
+    """Add custom attribute to current span"""
+    current_span = get_current_span()
+    if current_span and current_span.is_recording():
+        current_span.set_attribute(key, str(value))
