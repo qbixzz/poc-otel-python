@@ -92,12 +92,12 @@ async def health_check():
 # Get all items
 @app.get("/items", response_model=List[Item])
 async def get_items():
-    with tracer.start_as_current_span("get_items") as span:
-        span.set_attribute("endpoint", "get_items")
+    with tracer.start_as_current_span("recieve_item1") as span:
+        span.set_attribute("endpoint", "recieve_item2")
         span.set_attribute("items.count", len(items_db))
         
         # Record metrics
-        item_operations.add(1, {"operation": "list", "endpoint": "get_items"})
+        item_operations.add(1, {"operation": "list", "endpoint": "recieve"})
         
         items_list = list(items_db.values())
         span.set_attribute("response.items_count", len(items_list))

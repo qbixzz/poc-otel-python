@@ -1,10 +1,11 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, g
 import uuid
 from datetime import datetime
 import logging
 
 # Import OpenTelemetry components
 from otel_config import init_otel, get_tracer, get_meter
+from otel_middleware import setup_otel_middleware, trace_function, trace_span
 from opentelemetry import trace, metrics
 from opentelemetry.trace import Status, StatusCode
 
@@ -15,8 +16,11 @@ logger = logging.getLogger(__name__)
 # Create Flask app
 app = Flask(__name__)
 
-# Initialize OpenTelemetry
-init_otel(app)
+# Initialize OpenTelemetry first
+otel_config = init_otel(app)
+
+# Setup OpenTelemetry middleware for automatic instrumentation
+otel_middleware = setup_otel_middleware(app)
 
 # Get OpenTelemetry tracer and meter
 tracer = get_tracer(__name__)
@@ -45,6 +49,7 @@ item_operations = meter.create_counter(
 items_db = {}
 
 # Helper function to validate item data
+@trace_function("validate_item_data")
 def validate_item_data(data):
     required_fields = ['name', 'price']
     if not data:
@@ -72,30 +77,34 @@ def bad_request(error):
 def internal_error(error):
     return jsonify({'error': 'Internal server error'}), 500
 
-# Root endpoint
+# Root endpoint (relies on middleware for basic tracing)
 @app.route('/')
 def read_root():
-    with tracer.start_as_current_span("read_root") as span:
-        span.set_attribute("endpoint", "root")
-        response = {
-            'message': 'Welcome to Simple Flask API!',
-            'version': '1.0.0',
-            'timestamp': datetime.utcnow().isoformat()
-        }
-        span.set_attribute("response.message", response["message"])
-        return jsonify(response)
+    # Add custom business context via middleware
+    otel_middleware.add_custom_span_attribute("business.endpoint", "welcome")
+    otel_middleware.add_custom_span_attribute("response.type", "welcome_message")
+    
+    response = {
+        'message': 'Welcome to Simple Flask API!',
+        'version': '1.0.0',
+        'timestamp': datetime.now().isoformat(),
+        'trace_id': otel_middleware.get_trace_id()  # Include trace ID in response
+    }
+    
+    logger.info("Root endpoint accessed")
+    return jsonify(response)
 
-# Health check endpoint
+# Health check endpoint (excluded from detailed tracing)
 @app.route('/health')
 def health_check():
-    with tracer.start_as_current_span("health_check") as span:
-        span.set_attribute("endpoint", "health")
-        response = {
-            'status': 'healthy',
-            'service': 'flask-service',
-            'timestamp': datetime.utcnow().isoformat()
-        }
-        return jsonify(response)
+    response = {
+        'status': 'healthy',
+        'service': 'flask-service',
+        'timestamp': datetime.now().isoformat(),
+        'items_count': len(items_db)
+    }
+    
+    return jsonify(response)
 
 # Get all items
 @app.route('/items', methods=['GET'])
@@ -163,7 +172,7 @@ def create_item():
             'description': data.get('description', ''),
             'price': float(data['price']),
             'is_available': data.get('is_available', True),
-            'created_at': datetime.utcnow().isoformat()
+            'created_at': datetime.now().isoformat()
         }
         
         items_db[item_id] = new_item
@@ -209,7 +218,7 @@ def update_item(item_id):
             'price': float(data['price']),
             'is_available': data.get('is_available', True),
             'created_at': items_db[item_id].get('created_at'),
-            'updated_at': datetime.utcnow().isoformat()
+            'updated_at': datetime.now().isoformat()
         }
         
         items_db[item_id] = updated_item
