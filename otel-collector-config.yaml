@@ -240,7 +240,7 @@ service:
     traces:
       receivers: [otlp]
       processors: [memory_limiter, filter, groupbytrace, batch, transform]
-      exporters: [otlphttp/elastic, file/spans]
+      exporters: [otlphttp/elastic] #, file/spans
     
     metrics:
       receivers: [otlp, hostmetrics]
