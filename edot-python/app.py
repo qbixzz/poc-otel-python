@@ -53,6 +53,8 @@ def internal_error(error):
 # Root endpoint
 @app.route('/')
 def read_root():
+    logger.info("Root endpoint accessed")
+    
     response = {
         'message': 'Welcome to EDOT Flask API!',
         'version': '1.0.0',
@@ -61,12 +63,14 @@ def read_root():
         'service_name': os.getenv('OTEL_SERVICE_NAME', 'edot-flask-api')
     }
     
-    logger.info("Root endpoint accessed")
+    logger.info("Root endpoint completed successfully")
     return jsonify(response)
 
 # Health check endpoint
 @app.route('/health')
 def health_check():
+    logger.info("Health check accessed")
+    
     response = {
         'status': 'healthy',
         'service': os.getenv('OTEL_SERVICE_NAME', 'edot-flask-api'),
@@ -75,11 +79,14 @@ def health_check():
         'items_count': len(items_db)
     }
     
+    logger.info("Health check completed successfully")
     return jsonify(response)
 
 # Get all items
 @app.route('/items', methods=['GET'])
 def get_items():
+    logger.info("Getting all items")
+    
     with tracer.start_as_current_span("get_items") as span:
         span.set_attribute("value", "items")
     items_list = list(items_db.values())
@@ -94,6 +101,8 @@ def get_items():
 # Get item by ID
 @app.route('/items/<item_id>', methods=['GET'])
 def get_item(item_id):
+    logger.info(f"Getting item by ID: {item_id}")
+    
     with tracer.start_as_current_span("get_items_id") as span:
         span.set_attribute("value", "items_id")
     if item_id not in items_db:
@@ -108,6 +117,8 @@ def get_item(item_id):
 # Create new item
 @app.route('/items', methods=['POST'])
 def create_item():
+    logger.info("Creating new item")
+    
     data = request.get_json()
     
     # Validate input data
@@ -135,6 +146,8 @@ def create_item():
 # Update item
 @app.route('/items/<item_id>', methods=['PUT'])
 def update_item(item_id):
+    logger.info(f"Updating item: {item_id}")
+    
     if item_id not in items_db:
         logger.warning(f"Update failed - Item not found: {item_id}")
         return jsonify({'error': 'Item not found'}), 404
@@ -166,6 +179,8 @@ def update_item(item_id):
 # Delete item
 @app.route('/items/<item_id>', methods=['DELETE'])
 def delete_item(item_id):
+    logger.info(f"Deleting item: {item_id}")
+    
     if item_id not in items_db:
         logger.warning(f"Delete failed - Item not found: {item_id}")
         return jsonify({'error': 'Item not found'}), 404
@@ -181,6 +196,8 @@ def delete_item(item_id):
 # Search items by name or description
 @app.route('/items/search/<query>', methods=['GET'])
 def search_items(query):
+    logger.info(f"Searching items with query: {query}")
+    
     query_lower = query.lower()
     matching_items = [
         item for item in items_db.values()
@@ -197,6 +214,8 @@ def search_items(query):
 # Get items by availability status
 @app.route('/items/status/<status>', methods=['GET'])
 def get_items_by_status(status):
+    logger.info(f"Filtering items by status: {status}")
+    
     is_available = status.lower() == 'available'
     filtered_items = [
         item for item in items_db.values()
@@ -213,6 +232,8 @@ def get_items_by_status(status):
 # Custom endpoint to demonstrate error handling
 @app.route('/items/error', methods=['GET'])
 def trigger_error():
+    logger.info("Triggering intentional error for testing")
+    
     try:
         # Intentionally trigger an error for testing
         result = 1 / 0

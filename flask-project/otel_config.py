@@ -361,7 +361,11 @@ def get_current_span_id() -> Optional[str]:
 
 def get_request_id() -> Optional[str]:
     """Get current request ID"""
-    return getattr(g, 'request_id', None)
+    try:
+        return getattr(g, 'request_id', None)
+    except RuntimeError:
+        # We're outside of a Flask application context
+        return None
 
 def add_span_attribute(key: str, value):
     """Add custom attribute to current span"""

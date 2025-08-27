@@ -2,7 +2,9 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional
 import uuid
+import time
 import logging
+from datetime import datetime
 from contextlib import asynccontextmanager
 
 # Import OpenTelemetry components
@@ -10,8 +12,7 @@ from otel_config import init_otel, get_tracer, get_meter
 from opentelemetry import trace, metrics
 from opentelemetry.trace import Status, StatusCode
 
-
-# Configure logging
+# Minimal logging setup - OpenTelemetry handles correlation automatically
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -76,41 +77,66 @@ items_db = {}
 # Root endpoint
 @app.get("/")
 async def read_root():
-    with tracer.start_as_current_span("read_root") as span:
+    logger.info("Root endpoint accessed")
+    
+    with tracer.start_as_current_span("GET /") as span:
         span.set_attribute("endpoint", "root")
-        response = {"message": "Welcome to Simple FastAPI!", "version": "1.0.0"}
-        span.set_attribute("response.message", response["message"])
+        
+        response = {
+            "message": "Welcome to Simple FastAPI!", 
+            "version": "1.0.0",
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        logger.info("Root endpoint completed successfully")
         return response
 
 # Health check endpoint
 @app.get("/health")
 async def health_check():
-    with tracer.start_as_current_span("health_check") as span:
+    logger.info("Health check accessed")
+    
+    with tracer.start_as_current_span("GET /health") as span:
         span.set_attribute("endpoint", "health")
-        return {"status": "healthy", "service": "fastapi-service"}
+        response = {
+            "status": "healthy", 
+            "service": "fastapi-service",
+            "timestamp": datetime.now().isoformat(),
+            "items_count": len(items_db)
+        }
+        
+        logger.info("Health check completed")
+        return response
 
 # Get all items
 @app.get("/items", response_model=List[Item])
 async def get_items():
-    with tracer.start_as_current_span("recieve_item1") as span:
-        span.set_attribute("endpoint", "recieve_item2")
+    logger.info("Getting all items")
+    
+    with tracer.start_as_current_span("GET /items") as span:
+        span.set_attribute("endpoint", "get_items")
         span.set_attribute("items.count", len(items_db))
         
         # Record metrics
-        item_operations.add(1, {"operation": "list", "endpoint": "recieve"})
+        item_operations.add(1, {"operation": "list", "endpoint": "get_items"})
         
         items_list = list(items_db.values())
         span.set_attribute("response.items_count", len(items_list))
+        
+        logger.info(f"Successfully retrieved {len(items_list)} items")
         return items_list
 
 # Get item by ID
 @app.get("/items/{item_id}", response_model=Item)
 async def get_item(item_id: str):
-    with tracer.start_as_current_span("get_item") as span:
+    logger.info(f"Getting item: {item_id}")
+    
+    with tracer.start_as_current_span("GET /items/{item_id}") as span:
         span.set_attribute("endpoint", "get_item")
         span.set_attribute("item.id", item_id)
         
         if item_id not in items_db:
+            logger.warning(f"Item not found: {item_id}")
             span.record_exception(Exception("Item not found"))
             span.set_status(Status(StatusCode.ERROR, "Item not found"))
             raise HTTPException(status_code=404, detail="Item not found")
@@ -122,12 +148,15 @@ async def get_item(item_id: str):
         # Record metrics
         item_operations.add(1, {"operation": "get", "endpoint": "get_item"})
         
+        logger.info(f"Successfully retrieved item: {item.name}")
         return item
 
 # Create new item
 @app.post("/items", response_model=Item)
 async def create_item(item: ItemCreate):
-    with tracer.start_as_current_span("create_item") as span:
+    logger.info(f"Creating new item: {item.name}")
+    
+    with tracer.start_as_current_span("POST /items") as span:
         span.set_attribute("endpoint", "create_item")
         span.set_attribute("item.name", item.name)
         span.set_attribute("item.price", item.price)
@@ -143,22 +172,26 @@ async def create_item(item: ItemCreate):
         item_counter.add(1, {"operation": "created"})
         item_operations.add(1, {"operation": "create", "endpoint": "create_item"})
         
-        logger.info(f"Created item: {item.name} with ID: {item_id}")
+        logger.info(f"Successfully created item: {item.name} with ID: {item_id}")
         return new_item
 
 # Update item
 @app.put("/items/{item_id}", response_model=Item)
 async def update_item(item_id: str, item: ItemCreate):
-    with tracer.start_as_current_span("update_item") as span:
+    logger.info(f"Updating item: {item_id}")
+    
+    with tracer.start_as_current_span("PUT /items/{item_id}") as span:
         span.set_attribute("endpoint", "update_item")
         span.set_attribute("item.id", item_id)
         span.set_attribute("item.name", item.name)
         
         if item_id not in items_db:
+            logger.warning(f"Cannot update - item not found: {item_id}")
             span.record_exception(Exception("Item not found"))
             span.set_status(Status(StatusCode.ERROR, "Item not found"))
             raise HTTPException(status_code=404, detail="Item not found")
         
+        old_item = items_db[item_id]
         updated_item = Item(id=item_id, **item.dict())
         items_db[item_id] = updated_item
         
@@ -167,17 +200,20 @@ async def update_item(item_id: str, item: ItemCreate):
         # Record metrics
         item_operations.add(1, {"operation": "update", "endpoint": "update_item"})
         
-        logger.info(f"Updated item: {item.name} with ID: {item_id}")
+        logger.info(f"Successfully updated item: {item.name}")
         return updated_item
 
 # Delete item
 @app.delete("/items/{item_id}")
 async def delete_item(item_id: str):
-    with tracer.start_as_current_span("delete_item") as span:
+    logger.info(f"Deleting item: {item_id}")
+    
+    with tracer.start_as_current_span("DELETE /items/{item_id}") as span:
         span.set_attribute("endpoint", "delete_item")
         span.set_attribute("item.id", item_id)
         
         if item_id not in items_db:
+            logger.warning(f"Cannot delete - item not found: {item_id}")
             span.record_exception(Exception("Item not found"))
             span.set_status(Status(StatusCode.ERROR, "Item not found"))
             raise HTTPException(status_code=404, detail="Item not found")
@@ -190,28 +226,36 @@ async def delete_item(item_id: str):
         item_counter.add(-1, {"operation": "deleted"})
         item_operations.add(1, {"operation": "delete", "endpoint": "delete_item"})
         
-        logger.info(f"Deleted item: {deleted_item.name} with ID: {item_id}")
+        logger.info(f"Successfully deleted item: {deleted_item.name}")
         return {"message": f"Item {deleted_item.name} deleted successfully"}
 
-# Search items by name
-@app.get("/items/search/{query}", response_model=List[Item])
-async def search_items(query: str):
-    with tracer.start_as_current_span("search_items") as span:
+# Search items
+@app.get("/search")
+async def search_items(q: str = ""):
+    logger.info(f"Searching items with query: {q}")
+    
+    with tracer.start_as_current_span("GET /search") as span:
         span.set_attribute("endpoint", "search_items")
-        span.set_attribute("search.query", query)
+        span.set_attribute("search.query", q)
         
-        matching_items = [
-            item for item in items_db.values() 
-            if query.lower() in item.name.lower() or (item.description and query.lower() in item.description.lower())
-        ]
+        # Perform search
+        search_results = []
+        for item_id, item in items_db.items():
+            if q.lower() in item.name.lower() or q.lower() in item.description.lower():
+                search_results.append({
+                    "id": item_id,
+                    "name": item.name,
+                    "description": item.description,
+                    "price": item.price
+                })
         
-        span.set_attribute("search.results_count", len(matching_items))
+        span.set_attribute("search.results_count", len(search_results))
         
         # Record metrics
         item_operations.add(1, {"operation": "search", "endpoint": "search_items"})
         
-        logger.info(f"Search for '{query}' returned {len(matching_items)} items")
-        return matching_items
+        logger.info(f"Search completed: found {len(search_results)} items")
+        return {"query": q, "results": search_results, "count": len(search_results)}
 
 if __name__ == "__main__":
     import uvicorn
